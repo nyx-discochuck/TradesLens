@@ -3,6 +3,7 @@ import axios from "axios";
 import uniLogo from "./assets/uniswap.png";
 import sushiLogo from "./assets/sushiswap.png";
 import solidLogo from "./assets/solidly.png";
+import PharaohDashboard from "./PharaohDashboard.jsx";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Cell, PieChart, Pie
@@ -42,6 +43,8 @@ import {
 } from "lucide-react";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+const API_AUTH_TOKEN = import.meta.env.VITE_TRADESLENS_API_TOKEN || "";
+if (API_AUTH_TOKEN) axios.defaults.headers.common.Authorization = `Bearer ${API_AUTH_TOKEN}`;
 const WS_BASE_URL = API_BASE_URL ? API_BASE_URL.replace(/^http/, "ws") : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
 
 // ── Design tokens ──────────────────────────────────────────────────────────
@@ -112,6 +115,7 @@ const NAV = [
   { id: "ethereum", label: "Ethereum", logo: "https://cryptologos.cc/logos/ethereum-eth-logo.svg?v=025", color: "#627EEA" },
   { id: "arbitrum", label: "Arbitrum", logo: "https://cryptologos.cc/logos/arbitrum-arb-logo.svg?v=025", color: "#28A0F0" },
   { id: "optimism", label: "Optimism", logo: "https://cryptologos.cc/logos/optimism-ethereum-op-logo.svg?v=025", color: "#FF0420" },
+  { id: "pharaoh", label: "Pharaoh · Avalanche", color: "#E84142" },
 ];
 
 const GECKO_MAP = {
@@ -1499,7 +1503,7 @@ export default function App() {
     let reconnectTimer;
 
     const connect = () => {
-      const wsUrl = `${WS_BASE_URL}/api/v1/alpha/ws`;
+      const wsUrl = `${WS_BASE_URL}/api/v1/alpha/ws${API_AUTH_TOKEN ? `?access_token=${encodeURIComponent(API_AUTH_TOKEN)}` : ""}`;
       console.log(`Connecting to Intelligence Tunnel: ${wsUrl}`);
       socket = new WebSocket(wsUrl);
 
@@ -1559,7 +1563,7 @@ export default function App() {
       };
     };
 
-    connect();
+    if (view !== "pharaoh") connect();
 
     return () => {
       if (socket) socket.close();
@@ -1751,7 +1755,7 @@ export default function App() {
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
               <span style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>
-                {view === "overview" ? "Ecosystem Overview" : (CHAINS.find(c => c.toLowerCase() === view) || PROTOCOLS[view]?.label)}
+                {view === "overview" ? "Ecosystem Overview" : view === "pharaoh" ? "Pharaoh on Avalanche" : (CHAINS.find(c => c.toLowerCase() === view) || PROTOCOLS[view]?.label)}
               </span>
 
             </div>
@@ -1763,6 +1767,8 @@ export default function App() {
               const viewLow = view.toLowerCase();
               const isChain = ["ethereum", "arbitrum", "optimism"].includes(viewLow);
               const isOverview = viewLow === "overview";
+
+              if (viewLow === "pharaoh") return <PharaohDashboard />;
 
               if (isOverview || isChain) {
                 return (

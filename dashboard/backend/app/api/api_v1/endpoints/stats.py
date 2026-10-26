@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from app.core.database import get_db
+from app.core.security import require_api_token
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ CHAIN_MAPPING = {
 router = APIRouter()
 
 @router.get("/overview/summary")
-def get_stats_summary(db = Depends(get_db)):
+def get_stats_summary(_: None = Depends(require_api_token), db = Depends(get_db)):
     """
     Headline Stats (Summary):
     - Total Ecosystem Volume & Swaps (fct_dex_swaps)
@@ -66,14 +67,15 @@ def get_stats_summary(db = Depends(get_db)):
             "volume_by_chain": volume_by_chain,
             "volume_by_dex": [{"dex": r.dex, "volume": float(r.volume) or 0.0} for r in dex_vols]
         }
-    except Exception as e:
-        logger.error(f"SUMMARY ERROR: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    except Exception:
+        logger.exception("Summary query failed")
+        raise HTTPException(status_code=503, detail="summary temporarily unavailable")
 
 @router.get("/overview/analytics")
 def get_stats_analytics(
-    year: int = Query(2025, description="Year to analyze (e.g. 2025)"),
+    year: int = Query(2025, ge=2015, le=2100, description="Year to analyze (e.g. 2025)"),
     month: Optional[int] = Query(None, ge=1, le=12, description="Optional month (1-12) to analyze deeper"),
+    _: None = Depends(require_api_token),
     db = Depends(get_db)
 ):
     """
@@ -185,6 +187,6 @@ def get_stats_analytics(
                 for r in peak_hours
             ]
         }
-    except Exception as e:
-        logger.error(f"ANALYTICS ERROR: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    except Exception:
+        logger.exception("Analytics query failed")
+        raise HTTPException(status_code=503, detail="analytics temporarily unavailable")

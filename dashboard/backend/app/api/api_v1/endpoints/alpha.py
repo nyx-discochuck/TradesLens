@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 from app.core.database import get_db, BigQuerySession
+from app.core.security import ChainName, require_api_token, require_websocket_token
 
 logger = logging.getLogger(__name__)
 
@@ -164,9 +165,10 @@ router = APIRouter()
 
 @router.get("/metrics")
 def get_alpha_metrics(
-    chain_name: Optional[str] = Query(None, description="Filter by blockchain (e.g. Arbitrum, Ethereum, Optimism)"),
-    limit: int = Query(50, ge=1, le=2000),
-    offset: int = Query(0, ge=0),
+    chain_name: Optional[ChainName] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0, le=10_000),
+    _: None = Depends(require_api_token),
     db = Depends(get_db)
 ):
     """
@@ -174,10 +176,10 @@ def get_alpha_metrics(
     """
     
     try:
-        return fetch_alpha_metrics_data(db, chain_name, limit, offset)
-    except Exception as e:
-        logger.error(f"ALPHA METRICS ERROR: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return fetch_alpha_metrics_data(db, chain_name.value if chain_name else None, limit, offset)
+    except Exception:
+        logger.exception("Alpha metrics query failed")
+        raise HTTPException(status_code=503, detail="analytics temporarily unavailable")
 
 @router.websocket("/ws")
 async def alpha_metrics_ws(websocket: WebSocket):
@@ -185,6 +187,8 @@ async def alpha_metrics_ws(websocket: WebSocket):
     WebSocket endpoint for real-time alpha metrics updates.
     Uses the Singleton Broadcast pattern for efficiency.
     """
+    if not await require_websocket_token(websocket):
+        return
     await manager.connect(websocket)
     logger.info("WEBSOCKET CONNECTED: Client joined Intelligence Tunnel")
     

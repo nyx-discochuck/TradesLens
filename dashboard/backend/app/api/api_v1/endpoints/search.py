@@ -3,6 +3,7 @@ from typing import List, Optional, Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 from app.core.database import get_db
+from app.core.security import require_api_token
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +11,8 @@ router = APIRouter()
 
 @router.get("/")
 def universal_search(
-    q: Optional[str] = Query(None, description="Search query (tx hash, address, or symbol)"),
+    q: Optional[str] = Query(None, min_length=1, max_length=80, description="Search query (tx hash, address, or symbol)"),
+    _: None = Depends(require_api_token),
     db = Depends(get_db)
 ):
     """
@@ -128,6 +130,6 @@ def universal_search(
             "results": results
         }
 
-    except Exception as e:
-        logger.error(f"UNIFIED SEARCH ERROR: {str(e)}", exc_info=True)
-        return {"error": str(e), "latest": [], "top": []}
+    except Exception:
+        logger.exception("Unified search failed")
+        raise HTTPException(status_code=503, detail="search temporarily unavailable")

@@ -6,7 +6,10 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
-const DUNE_API_URL = "https://api.dune.com/api/v1/query/7361962/results?limit=100000&api_key=5G6PxLwYEQzkDcwbRjjrh6K7emxJPV7w";
+const DUNE_API_KEY = process.env.DUNE_API_KEY;
+if (!DUNE_API_KEY) throw new Error("DUNE_API_KEY is required; fallback credentials are not supported");
+const DUNE_API_URL = new URL("https://api.dune.com/api/v1/query/7361962/results");
+DUNE_API_URL.searchParams.set("limit", "100000");
 
 const NETWORKS = {
     1: { name: "ethereum", url: "https://eth.hypersync.xyz", blocksPerWeek: 50400 },
@@ -16,91 +19,55 @@ const NETWORKS = {
 
 async function syncPools() {
     console.log("Fetching active pools from Dune...");
-    const response = await fetch(DUNE_API_URL);
-    if (!response.ok) throw new Error("Failed to fetch Dune data");
+    const response = await fetch(DUNE_API_URL, { headers: { "X-Dune-API-Key": DUNE_API_KEY } });
+    if (!response.ok) throw new Error(`Dune request failed with status ${response.status}`);
     const duneData: any = await response.json();
     const rows = duneData.result?.rows || [];
-
     console.log(`Found ${rows.length} pools in Dune results.`);
 
-    // Map Dune blockchain names to Chain IDs
-    const chainMap: Record<string, number> = {
-        "ethereum": 1,
-        "arbitrum": 42161,
-        "optimism": 10
-    };
-
+    const chainMap: Record<string, number> = { ethereum: 1, arbitrum: 42161, optimism: 10 };
     const poolsByChain: Record<number, string[]> = { 1: [], 42161: [], 10: [] };
     const registry: Record<string, any> = {};
 
     rows.forEach((row: any) => {
         const chainId = chainMap[row.blockchain];
-        if (chainId && row.pool_address) {
-            const pAddr = row.pool_address.toLowerCase();
-            poolsByChain[chainId].push(pAddr);
-
-            // Canonicalize token ordering (UniswapV3 order)
-            const tA = row.token_bought_address?.toLowerCase();
-            const tB = row.token_sold_address?.toLowerCase();
-
-            if (tA && tB) {
-                const isT0 = tA < tB;
-                const t0 = isT0 ? tA : tB;
-                const t1 = isT0 ? tB : tA;
-
-                registry[`${chainId}-${pAddr}`] = {
-                    t0,
-                    t1,
-                    fee: row.fee || 3000,
-                    t0Meta: {
-                        symbol: isT0 ? row.token_bought_symbol : row.token_sold_symbol,
-                        decimals: isT0 ? row.token_bought_decimals : (row.token1_sold_decimals || row.token_sold_decimals)
-                    },
-                    t1Meta: {
-                        symbol: isT0 ? row.token_sold_symbol : row.token_bought_symbol,
-                        decimals: isT0 ? (row.token1_sold_decimals || row.token_sold_decimals) : row.token_bought_decimals
-                    }
-                };
-            }
-        }
+        if (!chainId || !row.pool_address) return;
+        const poolAddress = row.pool_address.toLowerCase();
+        poolsByChain[chainId].push(poolAddress);
+        const tokenA = row.token_bought_address?.toLowerCase();
+        const tokenB = row.token_sold_address?.toLowerCase();
+        if (!tokenA || !tokenB) return;
+        const tokenAFirst = tokenA < tokenB;
+        registry[`${chainId}-${poolAddress}`] = {
+            t0: tokenAFirst ? tokenA : tokenB,
+            t1: tokenAFirst ? tokenB : tokenA,
+            fee: row.fee || 3000,
+            t0Meta: { symbol: tokenAFirst ? row.token_bought_symbol : row.token_sold_symbol, decimals: tokenAFirst ? row.token_bought_decimals : (row.token1_sold_decimals || row.token_sold_decimals) },
+            t1Meta: { symbol: tokenAFirst ? row.token_sold_symbol : row.token_bought_symbol, decimals: tokenAFirst ? (row.token1_sold_decimals || row.token_sold_decimals) : row.token_bought_decimals },
+        };
     });
 
-    // Write registry file
     const registryPath = path.join(__dirname, "../src/handlers/utils/poolReg.json");
     fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2));
-    console.log(`Pool registry saved to ${registryPath}`);
-
     const configPath = path.join(__dirname, "../config.yaml");
     const config = yaml.load(fs.readFileSync(configPath, "utf-8")) as any;
 
-    console.log("Updating start blocks and pool addresses...");
-    for (const [chainIdStr, info] of Object.entries(NETWORKS)) {
-        const chainId = parseInt(chainIdStr);
-        const client = new HypersyncClient({
-            url: info.url,
-            apiToken: process.env.ENVIO_API_TOKEN || ""
-        });
-
+    for (const [chainIdText, info] of Object.entries(NETWORKS)) {
+        const chainId = Number.parseInt(chainIdText, 10);
+        const client = new HypersyncClient({ url: info.url, apiToken: process.env.ENVIO_API_TOKEN || "" });
         try {
             const currentBlock = await client.getHeight();
-            const startBlock = Math.max(0, currentBlock - info.blocksPerWeek);
-
-            const network = config.networks.find((n: any) => n.id === chainId);
-            if (network) {
-                network.start_block = startBlock;
-                const poolContract = network.contracts.find((c: any) => c.name === "UniswapV3Pool");
-                if (poolContract) {
-                    poolContract.address = poolsByChain[chainId];
-                    console.log(`- Chain ${chainId}: ${poolsByChain[chainId].length} pools, start_block ${startBlock}`);
-                }
-            }
-        } catch (e) {
-            console.error(`Failed to update chain ${chainId}:`, e);
+            const network = config.networks.find((item: any) => item.id === chainId);
+            if (!network) continue;
+            network.start_block = Math.max(0, currentBlock - info.blocksPerWeek);
+            const poolContract = network.contracts.find((item: any) => item.name === "UniswapV3Pool");
+            if (poolContract) poolContract.address = poolsByChain[chainId];
+        } catch (error) {
+            console.error(`Failed to update chain ${chainId}`);
         }
     }
-
     fs.writeFileSync(configPath, yaml.dump(config, { noRefs: true, lineWidth: -1 }));
-    console.log("\nSuccess! config.yaml and registry are updated.");
+    console.log("Pool registry and config updated.");
 }
 
-syncPools().catch(console.error);
+syncPools().catch(() => { console.error("Pool synchronization failed"); process.exitCode = 1; });

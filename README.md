@@ -1,5 +1,7 @@
 # TradesLens: DeFi Intelligence & Multi-Chain DEX Analytics Terminal
 
+> **Pharaoh fork note:** this branch adds a bounded, read-only Pharaoh on Avalanche view. Start with the [project wiki](docs/wiki/README.md). Upstream redistribution and relicensing rights remain unresolved because the reviewed source contains no repository-wide license grant; existing notices are preserved and this branch does not assign a license to upstream code.
+
 **TradesLens** is a high-performance, production-grade ELT (Extract, Load, Transform) data pipeline designed to ingest, transform, and analyze on-chain activity across multiple blockchains and Decentralized Exchanges (DEXes). 
 
 By combining **Envio HyperIndex** for real-time event indexing, **PySpark** for scalable Extract & Load (EL) capabilities, and **dbt** for modern data modeling and transformations (T) on **Google BigQuery**, TradesLens provides unified, analyst-ready analytics of the DeFi DEX ecosystem.

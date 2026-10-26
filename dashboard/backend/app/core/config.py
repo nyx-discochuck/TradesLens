@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     GCP_PROJECT_ID: str = "floci-local"
     GCP_DATASET_ID: str = "my_dataset"
     BIGQUERY_EMULATOR_HOST: Optional[str] = None
+    API_AUTH_TOKEN: str
+    MAX_BIGQUERY_BYTES_BILLED: int = 1_000_000_000
+    MAX_POOL_WATCHES: int = 50
+    MAX_WEBSOCKET_CONNECTIONS: int = 100
 
     # CORS
     BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []

@@ -8,6 +8,8 @@ import urllib.request
 import json
 from fastapi.concurrency import run_in_threadpool
 from app.core.database import get_db, SessionLocal
+from app.core.config import settings
+from app.core.security import ChainName, canonical_address, require_api_token, require_websocket_token
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +29,12 @@ info_cache = {}
 CACHE_TTL = datetime.timedelta(minutes=1)
 
 @router.get("/market-trending/{chain}")
-async def get_market_trending(chain: str, db = Depends(get_db)):
+async def get_market_trending(chain: ChainName, _: None = Depends(require_api_token), db = Depends(get_db)):
     """
     Fetch top pools by 24h volume from internal database (fct_dex_swaps).
     """
     # Normalize chain name for DB query (Title Case)
-    target_chain = chain.strip().capitalize()
+    target_chain = chain.value
     
     # Check Cache first
     now = datetime.datetime.now()
@@ -89,8 +91,14 @@ class PoolConnectionManager:
         return (chain.strip().capitalize(), pool.strip().lower())
 
     async def connect(self, websocket: WebSocket, chain: str, pool: str):
-        await websocket.accept()
         key = self._get_key(chain, pool)
+        if key not in self.connections and len(self.connections) >= settings.MAX_POOL_WATCHES:
+            await websocket.close(code=1013, reason="pool watch capacity reached")
+            return False
+        if sum(len(items) for items in self.connections.values()) >= settings.MAX_WEBSOCKET_CONNECTIONS:
+            await websocket.close(code=1013, reason="connection capacity reached")
+            return False
+        await websocket.accept()
         
         if key not in self.connections:
             self.connections[key] = []
@@ -104,6 +112,7 @@ class PoolConnectionManager:
         # Start the background polling task if it's not running
         if not self.poll_task or self.poll_task.done():
             self.poll_task = asyncio.create_task(self.run_polling_loop())
+        return True
 
     def disconnect(self, websocket: WebSocket, chain: str, pool: str):
         key = self._get_key(chain, pool)
@@ -130,26 +139,20 @@ class PoolConnectionManager:
                         await asyncio.sleep(5)
                         continue
 
-                    # Construct a query to fetch NEW swaps for only the active pools
-                    # We check for swaps in the last 2 minutes as a safety buffer
-                    # Build BigQuery-compatible pool filter using STRUCT
-                    # Example: STRUCT(chain_name, pool) IN UNNEST([STRUCT('Ethereum', '0xabc..'), ...])
-                    pool_structs = ", ".join(
-                        f"STRUCT('{k[0]}' AS chain_name, '{k[1]}' AS pool)"
-                        for k in active_keys
-                    )
-                    query = text(f"""
+                    query = text("""
                         SELECT 
                             id, tx_hash, swap_timestamp, token_pool, 
                             base_token_symbol, quote_token_symbol,
                             side, base_asset_amount, quote_asset_amount,
                             swap_price, amountUSD, chain_name, pool, txFrom
                         FROM fct_pool_swaps
-                        WHERE STRUCT(chain_name, pool) IN UNNEST([{pool_structs}])
+                        WHERE STRUCT(chain_name, pool) IN UNNEST(:active_pools)
                         AND swap_timestamp > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 MINUTE)
                         ORDER BY swap_timestamp DESC
                     """)
-                    results = db.execute(query).all()
+                    results = db.execute(query, {"active_pools": [
+                        {"chain_name": chain, "pool": pool} for chain, pool in active_keys
+                    ]}).all()
                     
                     # Group results by pool for distribution
                     updates_per_pool = {}
@@ -187,8 +190,8 @@ class PoolConnectionManager:
                             tasks = [ws.send_json({"type": "new_swaps", "data": swaps}) for ws in self.connections[key]]
                             await asyncio.gather(*tasks, return_exceptions=True)
 
-                except Exception as e:
-                    logger.error(f"Swaps Polling Error: {str(e)}")
+                except Exception:
+                    logger.exception("Swaps polling failed")
                 finally:
                     db.close()
                 
@@ -202,9 +205,10 @@ manager = PoolConnectionManager()
 
 @router.get("/list/{chain}/{pool_address}")
 def list_pool_swaps(
-    chain: str,
+    chain: ChainName,
     pool_address: str,
     limit: int = Query(50, ge=1, le=200),
+    _: None = Depends(require_api_token),
     db = Depends(get_db)
 ):
     """Fetch trade history for a specific pool."""
@@ -221,8 +225,8 @@ def list_pool_swaps(
     """)
     
     params = {
-        "chain": chain.strip().capitalize(),
-        "pool": pool_address.strip().lower(),
+        "chain": chain.value,
+        "pool": canonical_address(pool_address),
         "limit": limit
     }
     
@@ -246,28 +250,35 @@ def list_pool_swaps(
     ]
 
 @router.websocket("/ws/{chain}/{pool_address}")
-async def pool_swaps_websocket(websocket: WebSocket, chain: str, pool_address: str):
+async def pool_swaps_websocket(websocket: WebSocket, chain: ChainName, pool_address: str):
     """
     WebSocket for specific pool monitoring.
     Connect here to receive real-time swaps for a particular pool.
     """
-    await manager.connect(websocket, chain, pool_address)
+    if not await require_websocket_token(websocket):
+        return
+    pool_address = canonical_address(pool_address)
+    if not await manager.connect(websocket, chain.value, pool_address):
+        return
     try:
         while True:
             # Maintain connection, wait for disconnect
             await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket, chain, pool_address)
+        manager.disconnect(websocket, chain.value, pool_address)
     except Exception:
-        manager.disconnect(websocket, chain, pool_address)
+        manager.disconnect(websocket, chain.value, pool_address)
 
 
 @router.get("/pool-info/{chain}/{pool_address}")
-async def get_gecko_pool_info(chain: str, pool_address: str):
+async def get_gecko_pool_info(chain: ChainName, pool_address: str, _: None = Depends(require_api_token)):
     """
     Proxy to fetch pool intelligence metrics and metadata from GeckoTerminal.
     """
-    network = GECKO_MAP.get(chain.lower(), "eth")
+    network = GECKO_MAP.get(chain.name)
+    if not network:
+        raise HTTPException(status_code=422, detail="pool metadata is unavailable for this chain")
+    pool_address = canonical_address(pool_address)
     
     # Check Cache
     cache_key = f"{network}_{pool_address.lower()}"

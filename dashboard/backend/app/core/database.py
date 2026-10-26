@@ -63,9 +63,11 @@ class BigQuerySession:
         # Check if BIGQUERY_EMULATOR_HOST is defined in settings or env
         endpoint = settings.BIGQUERY_EMULATOR_HOST or os.getenv("BIGQUERY_EMULATOR_HOST")
         if endpoint:
+            if endpoint not in {"http://127.0.0.1:9050", "http://localhost:9050"}:
+                raise RuntimeError("BIGQUERY_EMULATOR_HOST must be an approved loopback endpoint")
             client_options["api_endpoint"] = endpoint
             credentials = AnonymousCredentials()
-            logger.info(f"BigQuery Session using local emulator endpoint: {endpoint}")
+            logger.info("BigQuery Session using approved local emulator endpoint")
         else:
             logger.info("BigQuery Session using standard GCP API client configuration")
 
@@ -108,13 +110,24 @@ class BigQuerySession:
         # but supports standard column alias references).
         # We also replace double quoted column names.
 
-        logger.info(f"Executing BigQuery Query:\n{sql}\nParameters: {params}")
+        logger.info("Executing parameterized BigQuery query")
 
         # Construct BigQuery Query parameters
         job_config = bigquery.QueryJobConfig()
+        job_config.maximum_bytes_billed = settings.MAX_BIGQUERY_BYTES_BILLED
         if params:
             query_params = []
             for k, v in params.items():
+                if isinstance(v, list) and all(isinstance(item, dict) for item in v):
+                    struct_type = "STRUCT<chain_name STRING, pool STRING>"
+                    struct_values = [
+                        bigquery.StructQueryParameter.positional(
+                            bigquery.ScalarQueryParameter.positional("STRING", item["chain_name"]),
+                            bigquery.ScalarQueryParameter.positional("STRING", item["pool"]),
+                        ) for item in v
+                    ]
+                    query_params.append(bigquery.ArrayQueryParameter(k, struct_type, struct_values))
+                    continue
                 if isinstance(v, int):
                     param_type = "INT64"
                 elif isinstance(v, float):
@@ -135,9 +148,9 @@ class BigQuerySession:
                 rows.append(dict(row.items()))
                 
             return BigQueryResults(rows)
-        except Exception as e:
-            logger.error(f"BigQuery execution failed: {str(e)}")
-            raise e
+        except Exception:
+            logger.exception("BigQuery execution failed")
+            raise
 
     def close(self):
         pass
