@@ -39,7 +39,8 @@ import {
   Leaf,
   Flame,
   Copy,
-  Check
+  Check,
+  Menu
 } from "lucide-react";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "";
@@ -1400,6 +1401,20 @@ const GLOBAL_STYLES = `
     animation-play-state: paused;
   }
 
+  .app-sidebar { z-index: 40; }
+  .app-main { width: 100%; }
+  .mobile-menu-button, .mobile-sidebar-backdrop { display: none; }
+  .app-content { min-width: 0; }
+  @media (max-width: 768px) {
+    .app-sidebar { position: fixed !important; inset: 0 auto 0 0; width: min(82vw, 280px) !important; min-width: min(82vw, 280px) !important; transform: translateX(-105%); box-shadow: 18px 0 50px rgba(0,0,0,.65); transition: transform .25s ease !important; }
+    .app-sidebar.mobile-open { transform: translateX(0); }
+    .mobile-sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 35; border: 0; background: rgba(0,0,0,.66); }
+    .mobile-menu-button { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; flex: 0 0 auto; border: 1px solid #2a2d38; border-radius: 8px; background: #111318; color: white; }
+    .app-header { padding: 10px 14px !important; }
+    .app-header-title { min-width: 0; overflow-wrap: anywhere; line-height: 1.2; }
+    .app-content { padding: 14px !important; }
+  }
+
 `;
 
 export default function App() {
@@ -1460,7 +1475,38 @@ export default function App() {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [suppressHover, setSuppressHover] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 768px)").matches);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const mobileMenuRef = useRef(null);
+  const sidebarRef = useRef(null);
   const isEffectiveCollapsed = isCollapsed && (!isHovered || suppressHover);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 768px)");
+    const update = () => { setIsMobile(media.matches); if (!media.matches) setMobileNavOpen(false); };
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const prior = document.activeElement;
+    sidebarRef.current?.querySelector("button")?.focus();
+    const close = (event) => {
+      if (event.key === "Escape") { setMobileNavOpen(false); mobileMenuRef.current?.focus(); }
+      if (event.key === "Tab" && sidebarRef.current) {
+        const focusable = [...sidebarRef.current.querySelectorAll('button, a[href]')];
+        if (!focusable.length) return;
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    };
+    window.addEventListener("keydown", close);
+    return () => { window.removeEventListener("keydown", close); prior?.focus?.(); };
+  }, [mobileNavOpen]);
+
+  useEffect(() => { setMobileNavOpen(false); }, [view]);
 
   const handleSearchResultClick = (item) => {
     if (item.type === "pool") {
@@ -1604,14 +1650,18 @@ export default function App() {
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#000", fontFamily: "'Outfit', sans-serif", color: C.text, overflow: "hidden" }}>
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <aside
+          ref={sidebarRef}
+          id="primary-navigation"
+          className={`app-sidebar${mobileNavOpen ? " mobile-open" : ""}`}
+          aria-hidden={isMobile && !mobileNavOpen}
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => {
             setIsHovered(false);
             setSuppressHover(false);
           }}
           style={{
-            width: isEffectiveCollapsed ? 68 : 220,
-            minWidth: isEffectiveCollapsed ? 68 : 220,
+            width: isMobile ? 220 : (isEffectiveCollapsed ? 68 : 220),
+            minWidth: isMobile ? 220 : (isEffectiveCollapsed ? 68 : 220),
             background: C.surface,
             borderRight: `1px solid ${C.border}`,
             display: "flex", flexDirection: "column",
@@ -1759,21 +1809,23 @@ export default function App() {
           </div>
         </aside>
 
-        <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: "#000000", overflow: "hidden" }}>
-          <header style={{
+        {mobileNavOpen && <button className="mobile-sidebar-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)} />}
+        <main className="app-main" style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: "#000000", overflow: "hidden" }}>
+          <header className="app-header" style={{
             padding: "14px 24px", borderBottom: `1px solid ${C.border}`,
             display: "flex", alignItems: "center", justifyContent: "space-between",
             background: "#000000", position: "sticky", top: 0, zIndex: 10,
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              <span style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>
+              <button ref={mobileMenuRef} className="mobile-menu-button" aria-label="Open navigation" aria-expanded={mobileNavOpen} aria-controls="primary-navigation" onClick={() => setMobileNavOpen(true)}><Menu size={20} /></button>
+              <span className="app-header-title" style={{ fontSize: 16, fontWeight: 800, color: "#fff" }}>
                 {view === "overview" ? "Ecosystem Overview" : view === "pharaoh" ? "Pharaoh on Avalanche" : (CHAINS.find(c => c.toLowerCase() === view) || PROTOCOLS[view]?.label)}
               </span>
 
             </div>
           </header>
 
-          <div style={{ padding: "20px 24px", flex: 1, overflowY: "auto" }}>
+          <div className="app-content" style={{ padding: "20px 24px", flex: 1, overflowY: "auto" }}>
 
             {(() => {
               const viewLow = view.toLowerCase();

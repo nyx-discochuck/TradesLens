@@ -1,5 +1,7 @@
 # TradesLens Pharaoh wiki
 
+- [Mobile layout and verification](../../MOBILE-FIX-VERIFICATION.md)
+
 This wiki documents the local `pharaoh-avalanche` branch.
 
 - [Architecture and data flow](architecture.md)
