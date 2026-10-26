@@ -26,6 +26,8 @@ curl 'http://127.0.0.1:8002/api/v1/pharaoh/swaps?limit=25'
 
 Search is truncated to 80 characters; limits are clamped; pool filters must be EVM addresses.
 
+The adapter rejects stale data instead of serving an expired cache. Historical artifact freshness is based on `generatedAt`, not the most recent complete-day boundary. Defaults are 15 minutes for `PHARAOH_HISTORICAL_MAX_AGE_SECONDS`, 2 minutes for `PHARAOH_LIVE_MAX_AGE_SECONDS`, and 12 blocks for `PHARAOH_LIVE_MAX_HEAD_LAG_BLOCKS`; each setting is bounded by the adapter. `/health` returns 200 only when both historical and live sources validate, otherwise 503. The UI displays history-through date separately from generation age and live head lag.
+
 ## Existing backend
 
-`API_AUTH_TOKEN` is required. Costly REST calls use `Authorization: Bearer …`; WebSockets accept that header or a short-lived `access_token`. For loopback development, `VITE_TRADESLENS_API_TOKEN` supplies the browser client. A Vite variable is visible to the browser, so use a low-privilege, short-lived local token and put any public deployment behind a real gateway/session layer. Configure explicit `BACKEND_CORS_ORIGINS`, `MAX_BIGQUERY_BYTES_BILLED`, `MAX_POOL_WATCHES`, and `MAX_WEBSOCKET_CONNECTIONS`.
+`API_AUTH_TOKEN` remains required for trusted, non-browser clients of the legacy BigQuery backend. REST and WebSocket clients send it in the `Authorization` bearer header; URL credentials are rejected. The browser does **not** receive or compile this backend token, and its legacy warehouse views are disabled until a same-origin gateway provides a real HttpOnly session. Do not invent a client-visible substitute. Keep this private backend loopback-only in the interim. Configure explicit `BACKEND_CORS_ORIGINS`, `MAX_BIGQUERY_BYTES_BILLED`, `MAX_POOL_WATCHES`, and `MAX_WEBSOCKET_CONNECTIONS`.

@@ -24,7 +24,9 @@ def require_api_token(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="authentication required")
 
 async def require_websocket_token(websocket: WebSocket) -> bool:
-    supplied = websocket.headers.get("authorization") or websocket.query_params.get("access_token")
+    # Query-string credentials leak through URLs and logs. Trusted non-browser
+    # clients must use the Authorization header, just like REST clients.
+    supplied = websocket.headers.get("authorization")
     if supplied and not supplied.startswith("Bearer "):
         supplied = f"Bearer {supplied}"
     if supplied and hmac.compare_digest(supplied, f"Bearer {settings.API_AUTH_TOKEN}"):

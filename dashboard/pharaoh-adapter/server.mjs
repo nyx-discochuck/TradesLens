@@ -7,6 +7,9 @@ const ALLOWED_ORIGINS = new Set((process.env.ALLOWED_ORIGINS || 'http://127.0.0.
 const ADDRESS = /^0x[0-9a-f]{40}$/;
 const HASH = /^0x[0-9a-f]{64}$/;
 const cache = new Map();
+const HISTORICAL_MAX_AGE_MS = boundedInt(process.env.PHARAOH_HISTORICAL_MAX_AGE_SECONDS, 900, 60, 86_400) * 1_000;
+const LIVE_MAX_AGE_MS = boundedInt(process.env.PHARAOH_LIVE_MAX_AGE_SECONDS, 120, 10, 3_600) * 1_000;
+const LIVE_MAX_HEAD_LAG_BLOCKS = boundedInt(process.env.PHARAOH_LIVE_MAX_HEAD_LAG_BLOCKS, 12, 0, 1_000);
 
 if (!['http://127.0.0.1:43140', 'http://localhost:43140'].includes(GATEWAY)) {
   throw new Error('AVAX_RADAR_GATEWAY_URL must be the canonical loopback Gateway');
@@ -40,14 +43,55 @@ async function gateway(path, ttlMs = 15_000) {
   } finally { clearTimeout(timeout); }
 }
 
+function timestamp(value, field) {
+  const parsed = Date.parse(value);
+  if (typeof value !== 'string' || !Number.isFinite(parsed)) throw new Error(`${field} is not a valid timestamp`);
+  return parsed;
+}
+
+function finiteInteger(value, field) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${field} is not a finite non-negative integer`);
+  return value;
+}
+
+function generatedFreshness(generatedAt, maxAgeMs, now = Date.now()) {
+  const generatedMs = timestamp(generatedAt, 'generatedAt');
+  const ageMs = now - generatedMs;
+  if (ageMs < -60_000) throw new Error('generatedAt is in the future');
+  return { generated_at: generatedAt, age_seconds: Math.max(0, Math.floor(ageMs / 1_000)), max_age_seconds: maxAgeMs / 1_000, stale: ageMs > maxAgeMs };
+}
+
 function validateAnalytics(value) {
   if (value?.schemaVersion !== 'avalanche-gateway-dex-analytics/v1' || value?.source !== 'avalanche_gateway' || value?.protocol !== 'pharaoh') throw new Error('historical schema mismatch');
   if (!Array.isArray(value.daily) || !Array.isArray(value.pools) || value.coverage?.days !== value.daily.length) throw new Error('historical coverage mismatch');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value.coverage?.completeThrough || '')) throw new Error('historical completeThrough is invalid');
+  const freshness = generatedFreshness(value.generatedAt, HISTORICAL_MAX_AGE_MS);
+  if (freshness.stale) throw new Error('historical artifact is stale');
+  value._freshness = freshness;
   return value;
 }
 
 function validateLive(value) {
   if (value?.schemaVersion !== 'avalanche-gateway-pharaoh-live/v1' || value?.source !== 'avalanche_gateway' || !Array.isArray(value.rows)) throw new Error('live schema mismatch');
+  const headBlock = finiteInteger(value.headBlock, 'headBlock');
+  const safeTipBlock = finiteInteger(value.safeTipBlock, 'safeTipBlock');
+  const cursor = finiteInteger(value.cursor, 'cursor');
+  if (safeTipBlock > headBlock) throw new Error('safeTipBlock exceeds headBlock');
+  if (cursor > safeTipBlock) throw new Error('cursor exceeds safeTipBlock');
+  const freshness = generatedFreshness(value.generatedAt, LIVE_MAX_AGE_MS);
+  const lagBlocks = headBlock - safeTipBlock;
+  freshness.head_block = headBlock;
+  freshness.safe_tip_block = safeTipBlock;
+  freshness.head_lag_blocks = lagBlocks;
+  freshness.max_head_lag_blocks = LIVE_MAX_HEAD_LAG_BLOCKS;
+  freshness.near_tip = !freshness.stale && lagBlocks <= LIVE_MAX_HEAD_LAG_BLOCKS;
+  if (!freshness.near_tip) throw new Error('live head is stale or lagging');
+  for (const row of value.rows) {
+    const blockNumber = finiteInteger(row.blockNumber, 'row.blockNumber');
+    if (blockNumber > safeTipBlock) throw new Error('live row exceeds safe tip');
+    timestamp(row.blockTime, 'row.blockTime');
+  }
+  value._freshness = freshness;
   return value;
 }
 
@@ -83,6 +127,7 @@ function coverage(value) {
     surfaced_pools: value.pools.length,
     registered_pools: value.coverage.factoryRegistry?.total ?? null,
     lifetime_complete: false,
+    artifact: value._freshness,
   };
 }
 
@@ -92,8 +137,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== 'GET') return json(res, 405, { error: 'method_not_allowed' }, origin);
     const url = new URL(req.url, `http://${HOST}:${PORT}`);
     if (url.pathname === '/health') {
-      const value = await analytics();
-      return json(res, 200, { status: 'ok', source: 'avalanche_gateway', coverage: coverage(value) }, origin);
+      const [historicalValue, liveValue] = await Promise.all([analytics(), live()]);
+      return json(res, 200, { status: 'ok', source: 'avalanche_gateway', historical: coverage(historicalValue), live: liveValue._freshness }, origin);
     }
     if (url.pathname === '/api/v1/pharaoh/overview') {
       const value = await analytics();
@@ -129,7 +174,7 @@ const server = http.createServer(async (req, res) => {
         tx_url: HASH.test(row.txHash) ? `https://snowscan.xyz/tx/${row.txHash}` : null,
         pool_url: ADDRESS.test(row.poolAddress) ? `https://snowscan.xyz/address/${row.poolAddress}` : null,
       }));
-      return json(res, 200, { rows, cursor: value.cursor, generated_at: value.generatedAt, modes: ['LEGACY', 'CL', 'DLMM'], coverage: { registered_pools: value.registryPools, window_blocks: value.windowBlocks, lifetime_complete: false } }, origin);
+      return json(res, 200, { rows, cursor: value.cursor, generated_at: value.generatedAt, freshness: value._freshness, modes: ['LEGACY', 'CL', 'DLMM'], coverage: { registered_pools: value.registryPools, window_blocks: value.windowBlocks, lifetime_complete: false } }, origin);
     }
     if (url.pathname === '/api/v1/pharaoh/history') {
       const value = await analytics();

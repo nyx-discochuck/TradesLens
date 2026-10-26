@@ -7,5 +7,6 @@ This wiki documents the local `pharaoh-avalanche` branch.
 - [Coverage, decisions, and limitations](coverage-and-tradeoffs.md)
 - [Security and troubleshooting](security-and-troubleshooting.md)
 - [Build and verification record](../../BUILD-VERIFICATION.md)
+- [Final security and freshness verification](../../FINAL-FIX-VERIFICATION.md)
 
 The fork is read-only analytics. It does not connect wallets, request approvals, sign messages, or submit transactions.

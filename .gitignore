@@ -1,0 +1,6 @@
+# Project-local generated output only.
+dashboard/frontend/node_modules/
+dashboard/frontend/dist/
+dashboard/backend/**/__pycache__/
+airflow/dags/__pycache__/
+*.py[cod]

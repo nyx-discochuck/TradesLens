@@ -4,11 +4,13 @@ import { Activity, AlertTriangle, ExternalLink, Search, Waves } from 'lucide-rea
 const API = import.meta.env.VITE_PHARAOH_API_URL || 'http://127.0.0.1:8002';
 const money = (value) => value == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 2 }).format(value);
 const integer = (value) => value == null ? '—' : new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+const age = (seconds) => seconds == null ? '—' : seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.floor(seconds / 60)}m` : `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 
 export default function PharaohDashboard() {
   const [overview, setOverview] = useState(null);
   const [pools, setPools] = useState([]);
   const [swaps, setSwaps] = useState([]);
+  const [liveFreshness, setLiveFreshness] = useState(null);
   const [query, setQuery] = useState('');
   const [error, setError] = useState(null);
 
@@ -19,8 +21,8 @@ export default function PharaohDashboard() {
       fetch(`${API}/api/v1/pharaoh/trending?limit=16`, { signal: controller.signal }).then(check),
       fetch(`${API}/api/v1/pharaoh/swaps?limit=30`, { signal: controller.signal }).then(check),
     ]).then(([summary, ranking, live]) => {
-      setOverview(summary); setPools(ranking.pools); setSwaps(live.rows); setError(null);
-    }).catch((reason) => { if (reason.name !== 'AbortError') setError('Canonical Gateway data is unavailable. No fallback source was used.'); });
+      setOverview(summary); setPools(ranking.pools); setSwaps(live.rows); setLiveFreshness(live.freshness); setError(null);
+    }).catch((reason) => { if (reason.name !== 'AbortError') { setLiveFreshness(null); setError('Canonical Gateway data is unavailable or stale. No cached or fallback source was used.'); } });
     return () => controller.abort();
   }, []);
 
@@ -34,7 +36,7 @@ export default function PharaohDashboard() {
         <h1>Pharaoh <em>flow desk</em></h1>
         <p>Read-only swap intelligence across Legacy, concentrated-liquidity, and DLMM pools.</p>
       </div>
-      <div className="pharaoh-status"><Activity size={15} /> Gateway only <strong>{coverage?.through || '—'}</strong></div>
+      <div className="pharaoh-status"><Activity size={15} /> History through <strong>{coverage?.through || 'unavailable'}</strong><small>generated {coverage?.artifact ? `${age(coverage.artifact.age_seconds)} ago` : '—'}</small></div>
     </div>
 
     {error && <div className="pharaoh-error"><AlertTriangle size={18} /> {error}</div>}
@@ -58,7 +60,7 @@ export default function PharaohDashboard() {
         </div>
       </article>
       <article className="pharaoh-panel pharaoh-live">
-        <header><div><span>NEAR TIP</span><h2>Live swaps</h2></div><b><i/> RECEIPT-SUCCESS</b></header>
+        <header><div><span>{liveFreshness?.near_tip ? 'NEAR TIP' : 'LIVE UNAVAILABLE'}</span><h2>Live swaps</h2><small className="pharaoh-freshness">Generated {liveFreshness ? `${age(liveFreshness.age_seconds)} ago` : '—'} · head #{liveFreshness?.head_block ?? '—'} · safety lag {liveFreshness?.head_lag_blocks ?? '—'} blocks</small></div><b><i className={liveFreshness?.near_tip ? '' : 'stale'}/> RECEIPT-SUCCESS</b></header>
         <div className="pharaoh-tape">{swaps.map((swap) => <a href={swap.tx_url} target="_blank" rel="noreferrer" key={swap.id}>
           <div><i className={`mode mode-${swap.mode?.toLowerCase()}`}>{swap.mode}</i><strong>{swap.tokenIn} → {swap.tokenOut}</strong><time>{swap.blockTime ? new Date(swap.blockTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : `#${swap.blockNumber}`}</time></div>
           <p>{swap.amountIn} <span>{swap.tokenIn}</span> <b>→</b> {swap.amountOut} <span>{swap.tokenOut}</span></p>

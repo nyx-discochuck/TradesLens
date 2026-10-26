@@ -84,6 +84,8 @@ class PoolConnectionManager:
         self.poll_task: Optional[asyncio.Task] = None
         # Track the latest timestamp we've seen per pool to only fetch NEW swaps
         self.last_seen_timestamps: Dict[Tuple[str, str], datetime.datetime] = {}
+        self._lock = asyncio.Lock()
+        self._send_timeout_seconds = 3
 
     def _get_key(self, chain: str, pool: str) -> Tuple[str, str]:
         """Normalize keys for consistency."""
@@ -92,37 +94,46 @@ class PoolConnectionManager:
 
     async def connect(self, websocket: WebSocket, chain: str, pool: str):
         key = self._get_key(chain, pool)
-        if key not in self.connections and len(self.connections) >= settings.MAX_POOL_WATCHES:
-            await websocket.close(code=1013, reason="pool watch capacity reached")
-            return False
-        if sum(len(items) for items in self.connections.values()) >= settings.MAX_WEBSOCKET_CONNECTIONS:
-            await websocket.close(code=1013, reason="connection capacity reached")
-            return False
-        await websocket.accept()
-        
-        if key not in self.connections:
-            self.connections[key] = []
-            # Initialize timestamp with "now" so we only broadcast swaps happening AFTER connection
-            # If user wants history, they should use the /list endpoint
-            self.last_seen_timestamps[key] = datetime.datetime.now(datetime.timezone.utc)
-            
-        self.connections[key].append(websocket)
+        async with self._lock:
+            if key not in self.connections and len(self.connections) >= settings.MAX_POOL_WATCHES:
+                await websocket.close(code=1013, reason="pool watch capacity reached")
+                return False
+            if sum(len(items) for items in self.connections.values()) >= settings.MAX_WEBSOCKET_CONNECTIONS:
+                await websocket.close(code=1013, reason="connection capacity reached")
+                return False
+            if key not in self.connections:
+                self.connections[key] = []
+                self.last_seen_timestamps[key] = datetime.datetime.now(datetime.timezone.utc)
+            self.connections[key].append(websocket)
+        try:
+            await websocket.accept()
+        except Exception:
+            await self.disconnect(websocket, chain, pool)
+            raise
         logger.info(f"Client connected to pool: {key[1]} on {key[0]}. Active pools: {len(self.connections)}")
         
         # Start the background polling task if it's not running
-        if not self.poll_task or self.poll_task.done():
-            self.poll_task = asyncio.create_task(self.run_polling_loop())
+        async with self._lock:
+            if not self.poll_task or self.poll_task.done():
+                self.poll_task = asyncio.create_task(self.run_polling_loop())
         return True
 
-    def disconnect(self, websocket: WebSocket, chain: str, pool: str):
+    async def disconnect(self, websocket: WebSocket, chain: str, pool: str):
         key = self._get_key(chain, pool)
-        if key in self.connections:
-            self.connections[key].remove(websocket)
-            if not self.connections[key]:
-                logger.info(f"No more listeners for pool {key[1]}. Cleaning up.")
-                del self.connections[key]
-                if key in self.last_seen_timestamps:
-                    del self.last_seen_timestamps[key]
+        task = None
+        async with self._lock:
+            if key in self.connections and websocket in self.connections[key]:
+                self.connections[key].remove(websocket)
+                if not self.connections[key]:
+                    logger.info(f"No more listeners for pool {key[1]}. Cleaning up.")
+                    del self.connections[key]
+                    self.last_seen_timestamps.pop(key, None)
+            if not self.connections and self.poll_task:
+                task = self.poll_task
+                self.poll_task = None
+        if task and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def run_polling_loop(self):
         """
@@ -186,9 +197,21 @@ class PoolConnectionManager:
                         self.last_seen_timestamps[key] = newest_ts
                         
                         # Dispatch to only the relevant WebSockets
-                        if key in self.connections:
-                            tasks = [ws.send_json({"type": "new_swaps", "data": swaps}) for ws in self.connections[key]]
-                            await asyncio.gather(*tasks, return_exceptions=True)
+                        async with self._lock:
+                            listeners = list(self.connections.get(key, []))
+
+                        async def bounded_send(ws):
+                            try:
+                                await asyncio.wait_for(ws.send_json({"type": "new_swaps", "data": swaps}), self._send_timeout_seconds)
+                                return ws, True
+                            except Exception:
+                                return ws, False
+
+                        results = await asyncio.gather(*(bounded_send(ws) for ws in listeners))
+                        for ws, ok in results:
+                            if ok:
+                                continue
+                            await self.disconnect(ws, key[0], key[1])
 
                 except Exception:
                     logger.exception("Swaps polling failed")
@@ -200,6 +223,10 @@ class PoolConnectionManager:
             logger.info("Swaps Dispatcher Loop stopped")
         except Exception as e:
             logger.error(f"Fatal Dispatcher Loop error: {str(e)}")
+        finally:
+            async with self._lock:
+                if self.poll_task is asyncio.current_task():
+                    self.poll_task = None
 
 manager = PoolConnectionManager()
 
@@ -265,9 +292,9 @@ async def pool_swaps_websocket(websocket: WebSocket, chain: ChainName, pool_addr
             # Maintain connection, wait for disconnect
             await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket, chain.value, pool_address)
+        await manager.disconnect(websocket, chain.value, pool_address)
     except Exception:
-        manager.disconnect(websocket, chain.value, pool_address)
+        await manager.disconnect(websocket, chain.value, pool_address)
 
 
 @router.get("/pool-info/{chain}/{pool_address}")

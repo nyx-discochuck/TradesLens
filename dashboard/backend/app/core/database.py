@@ -119,14 +119,15 @@ class BigQuerySession:
             query_params = []
             for k, v in params.items():
                 if isinstance(v, list) and all(isinstance(item, dict) for item in v):
-                    struct_type = "STRUCT<chain_name STRING, pool STRING>"
                     struct_values = [
                         bigquery.StructQueryParameter.positional(
-                            bigquery.ScalarQueryParameter.positional("STRING", item["chain_name"]),
-                            bigquery.ScalarQueryParameter.positional("STRING", item["pool"]),
+                            bigquery.ScalarQueryParameter("chain_name", "STRING", item["chain_name"]),
+                            bigquery.ScalarQueryParameter("pool", "STRING", item["pool"]),
                         ) for item in v
                     ]
-                    query_params.append(bigquery.ArrayQueryParameter(k, struct_type, struct_values))
+                    # google-cloud-bigquery expects its recognized STRUCT marker here;
+                    # a SQL declaration such as ``STRUCT<...>`` is not an API type.
+                    query_params.append(bigquery.ArrayQueryParameter(k, "STRUCT", struct_values))
                     continue
                 if isinstance(v, int):
                     param_type = "INT64"

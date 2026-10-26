@@ -3,8 +3,9 @@
 ## Security changes
 
 - No embedded Dune credential remains in the current tree. `DUNE_API_KEY` is required and sent in a header.
-- Pool watches use typed `STRUCT<chain_name STRING, pool STRING>` arrays, a chain enum, and strict address validation.
-- Costly BigQuery routes require authentication and enforce row, offset, connection, pool-watch, and bytes-billed ceilings.
+- Pool watches use the Google client library's typed `STRUCT` array representation, a chain enum, and strict address validation.
+- Costly BigQuery routes require header authentication and enforce row, offset, process connection, pool-watch, send-timeout, and bytes-billed ceilings. Failed sockets are removed and idle pollers stop after the last disconnect.
+- No backend token is compiled into the browser or placed in a WebSocket URL. Legacy browser analytics stay disabled until an HttpOnly same-origin session exists; the private bearer API remains available to trusted non-browser clients.
 - Query text, parameters, and raw exception strings are not emitted on remediated paths.
 - Compose admin/data ports are loopback-only; secrets have no fallback; Hasura console/anonymous role are disabled.
 
@@ -21,6 +22,8 @@ The exposed credential may remain in upstream/fork history. Its owner must rotat
 **Em dash metric** — source data is unavailable. Do not replace unknown TVL, fee, revenue, or pricing values with zero.
 
 **Missing SnowScan link** — links require a strictly valid transaction hash or address.
+
+**503 from Pharaoh adapter** — the Gateway is unreachable, incompatible, or outside the configured generation-age/head-lag bounds. The adapter does not serve an expired cache. A prior day's `completeThrough` is normal for a complete-day artifact and is not itself the freshness clock.
 
 ## Rights note
 

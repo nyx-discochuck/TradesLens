@@ -2,6 +2,8 @@
 
 > **Pharaoh fork note:** this branch adds a bounded, read-only Pharaoh on Avalanche view. Start with the [project wiki](docs/wiki/README.md). Upstream redistribution and relicensing rights remain unresolved because the reviewed source contains no repository-wide license grant; existing notices are preserved and this branch does not assign a license to upstream code.
 
+The public Pharaoh adapter is separate from the private legacy BigQuery API. Browser builds contain no legacy bearer token; legacy browser analytics remain disabled until a real same-origin HttpOnly session gateway exists. The Pharaoh view fails closed when canonical Gateway artifacts exceed documented freshness bounds and displays historical through-date separately from live generation/head lag.
+
 **TradesLens** is a high-performance, production-grade ELT (Extract, Load, Transform) data pipeline designed to ingest, transform, and analyze on-chain activity across multiple blockchains and Decentralized Exchanges (DEXes). 
 
 By combining **Envio HyperIndex** for real-time event indexing, **PySpark** for scalable Extract & Load (EL) capabilities, and **dbt** for modern data modeling and transformations (T) on **Google BigQuery**, TradesLens provides unified, analyst-ready analytics of the DeFi DEX ecosystem.
@@ -113,7 +115,7 @@ docker-compose up --build backend
 
 # Start Frontend
 cd ../frontend
-npm install && npm run dev
+npm ci --ignore-scripts && npm run dev
 ```
 
 ---

@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 from app.core.database import get_db, BigQuerySession
+from app.core.config import settings
 from app.core.security import ChainName, require_api_token, require_websocket_token
 
 logger = logging.getLogger(__name__)
@@ -15,44 +16,71 @@ class ConnectionManager:
         self.broadcast_task: Optional[asyncio.Task] = None
         self.last_data = None
         self.last_hash = None
+        self._lock = asyncio.Lock()
+        self._send_timeout_seconds = 3
 
     async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
+        async with self._lock:
+            if len(self.active_connections) >= settings.MAX_WEBSOCKET_CONNECTIONS:
+                await websocket.close(code=1013, reason="connection capacity reached")
+                return False
+            self.active_connections.append(websocket)
+        try:
+            await websocket.accept()
+        except Exception:
+            async with self._lock:
+                if websocket in self.active_connections:
+                    self.active_connections.remove(websocket)
+            raise
         # Send initial data immediately to the new user if we have it
         if self.last_data:
             try:
-                await websocket.send_json(self.last_data)
+                await asyncio.wait_for(websocket.send_json(self.last_data), self._send_timeout_seconds)
             except Exception:
-                pass
+                await self.disconnect(websocket)
+                return False
         
         # Start the background broadcast task if not already running
-        if not self.broadcast_task or self.broadcast_task.done():
-            self.broadcast_task = asyncio.create_task(self.run_broadcast_loop())
+        async with self._lock:
+            if not self.broadcast_task or self.broadcast_task.done():
+                self.broadcast_task = asyncio.create_task(self.run_broadcast_loop())
+        return True
 
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+    async def disconnect(self, websocket: WebSocket):
+        task = None
+        async with self._lock:
+            if websocket in self.active_connections:
+                self.active_connections.remove(websocket)
+            if not self.active_connections and self.broadcast_task:
+                task = self.broadcast_task
+                self.broadcast_task = None
+        if task and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def broadcast(self, message: list):
-        if not self.active_connections:
+        async with self._lock:
+            connections = list(self.active_connections)
+        if not connections:
             return
-            
-        # Create tasks for all sends so one slow connection doesn't block others
-        tasks = []
-        for connection in self.active_connections:
-            tasks.append(connection.send_json(message))
-        
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+
+        async def bounded_send(connection):
+            try:
+                await asyncio.wait_for(connection.send_json(message), self._send_timeout_seconds)
+                return connection, True
+            except Exception:
+                return connection, False
+
+        results = await asyncio.gather(*(bounded_send(connection) for connection in connections))
+        failed = {connection for connection, ok in results if not ok}
+        if failed:
+            async with self._lock:
+                self.active_connections = [item for item in self.active_connections if item not in failed]
 
     async def run_broadcast_loop(self):
         logger.info("STARTING GLOBAL BROADCAST LOOP")
         try:
-            while True:
-                if not self.active_connections:
-                    await asyncio.sleep(10)
-                    continue
+            while self.active_connections:
 
                 db = BigQuerySession()
                 try:
@@ -72,6 +100,10 @@ class ConnectionManager:
                 await asyncio.sleep(5)
         except asyncio.CancelledError:
             logger.info("BROADCAST LOOP STOPPED")
+        finally:
+            async with self._lock:
+                if self.broadcast_task is asyncio.current_task():
+                    self.broadcast_task = None
 
 manager = ConnectionManager()
 
@@ -189,7 +221,8 @@ async def alpha_metrics_ws(websocket: WebSocket):
     """
     if not await require_websocket_token(websocket):
         return
-    await manager.connect(websocket)
+    if not await manager.connect(websocket):
+        return
     logger.info("WEBSOCKET CONNECTED: Client joined Intelligence Tunnel")
     
     try:
@@ -204,4 +237,4 @@ async def alpha_metrics_ws(websocket: WebSocket):
         # Client disconnects often look like generic errors here
         pass
     finally:
-        manager.disconnect(websocket)
+        await manager.disconnect(websocket)

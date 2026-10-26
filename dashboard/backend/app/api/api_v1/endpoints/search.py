@@ -1,6 +1,6 @@
 import logging
 from typing import List, Optional, Any
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from app.core.database import get_db
 from app.core.security import require_api_token

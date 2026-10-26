@@ -43,9 +43,17 @@ import {
 } from "lucide-react";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "";
-const API_AUTH_TOKEN = import.meta.env.VITE_TRADESLENS_API_TOKEN || "";
-if (API_AUTH_TOKEN) axios.defaults.headers.common.Authorization = `Bearer ${API_AUTH_TOKEN}`;
 const WS_BASE_URL = API_BASE_URL ? API_BASE_URL.replace(/^http/, "ws") : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+// The legacy warehouse API has no browser-safe session exchange yet. Do not
+// compile its bearer token into Vite or let an unauthenticated browser trigger
+// costly BigQuery work. Pharaoh's public, read-only adapter uses fetch directly.
+const LEGACY_BACKEND_SESSION_AVAILABLE = false;
+axios.interceptors.request.use((config) => {
+  if (!LEGACY_BACKEND_SESSION_AVAILABLE) {
+    return Promise.reject(new axios.Cancel('Legacy analytics require a same-origin HttpOnly session'));
+  }
+  return config;
+});
 
 // ── Design tokens ──────────────────────────────────────────────────────────
 const C = {
@@ -456,6 +464,7 @@ function PoolDetails({ pool, onBack, onPoolClick }) {
   }, [pool?.chain, pool?.pool_address]);
 
   useEffect(() => {
+    if (!LEGACY_BACKEND_SESSION_AVAILABLE) return undefined;
     const chainSlug = pool.chain.toLowerCase();
     const wsUrl = `${WS_BASE_URL}/api/v1/swaps/ws/${chainSlug}/${pool.pool_address}`;
 
@@ -1499,12 +1508,15 @@ export default function App() {
 
   // 3. Real-time WebSocket Logic
   useEffect(() => {
+    if (!LEGACY_BACKEND_SESSION_AVAILABLE) {
+      setWsStatus("unavailable");
+      return undefined;
+    }
     let socket;
     let reconnectTimer;
 
     const connect = () => {
-      const wsUrl = `${WS_BASE_URL}/api/v1/alpha/ws${API_AUTH_TOKEN ? `?access_token=${encodeURIComponent(API_AUTH_TOKEN)}` : ""}`;
-      console.log(`Connecting to Intelligence Tunnel: ${wsUrl}`);
+      const wsUrl = `${WS_BASE_URL}/api/v1/alpha/ws`;
       socket = new WebSocket(wsUrl);
 
       socket.onopen = () => {
