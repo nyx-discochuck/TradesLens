@@ -19,4 +19,4 @@ The current Gateway artifact is a 90-complete-day, partial-pool-universe view, n
 
 ## Verification checkpoint
 
-`node --check`, Python compilation, `git diff --check`, and direct requests through all seven adapter route families passed. The real Gateway returned its 90-day/383-pool artifact and live swaps through the adapter. Frontend dependency installation was attempted with guarded `npm ci --ignore-scripts`; the guard blocked on moderate advisories in the resolved lock (including Vite, Axios, and follow-redirects), so no bypass was used and the React build remains unverified.
+`node --check`, Python compilation, `git diff --check`, and direct requests through all seven adapter route families passed. The real Gateway returned its 90-day artifact and pool-filtered live swaps through the adapter. Reviewed fixed dependency versions were resolved through the guarded npm path with lifecycle scripts disabled; Socket reported no new risks, `npm audit` reported zero known vulnerabilities, and the Vite production build passed. Browser screenshot capture was not trustworthy on this host and remains explicitly unverified; see `BUILD-VERIFICATION.md`.

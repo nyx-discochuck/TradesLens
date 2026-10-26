@@ -14,7 +14,7 @@ node --check server.mjs
 node server.mjs
 ```
 
-Defaults bind to `127.0.0.1:8002`. `AVAX_RADAR_GATEWAY_URL` accepts only `http://127.0.0.1:43140` or localhost. Set `VITE_PHARAOH_API_URL=http://127.0.0.1:8002` and choose **Pharaoh · Avalanche** in the dashboard.
+Defaults bind to `127.0.0.1:8002`. `AVAX_RADAR_GATEWAY_URL` accepts only `http://127.0.0.1:43140` or localhost. Set `VITE_PHARAOH_API_URL=http://127.0.0.1:8002` and choose **Pharaoh · Avalanche** in the dashboard. For a direct local entry, open `http://127.0.0.1:5173/?view=pharaoh`.
 
 If the host exports an HTTP proxy, include `127.0.0.1,localhost` in both `NO_PROXY` and `no_proxy`. The supplied Compose service does this so the canonical loopback request is not tunneled.
 

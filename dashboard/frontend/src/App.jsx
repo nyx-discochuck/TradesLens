@@ -1401,7 +1401,7 @@ export default function App() {
     return () => document.head.removeChild(style);
   }, []);
 
-  const [view, setView] = useState("overview");
+  const [view, setView] = useState(() => new URLSearchParams(window.location.search).get("view") === "pharaoh" ? "pharaoh" : "overview");
   const [selectedPool, setSelectedPool] = useState(null);
   const [summary, setSummary] = useState(null);
   const [alphaMetrics, setAlphaMetrics] = useState([]);
@@ -1699,7 +1699,7 @@ export default function App() {
             {!isEffectiveCollapsed && <div style={{ fontSize: 10, color: C.dim, letterSpacing: ".08em", textTransform: "uppercase", padding: "4px 12px 10px", fontWeight: 700, opacity: 0.8 }}>Networks</div>}
             {NAV.filter(n => n.id !== "overview").map(item => {
               const active = view === item.id;
-              const Icon = item.icon;
+              const Icon = item.icon || Activity;
               return (
                 <button key={item.id} onClick={() => setView(item.id)}
                   style={{
